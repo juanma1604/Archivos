@@ -24,39 +24,40 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 progress_data = {'current': 0, 'total': 0, 'status': 'idle', 'message': '', 'debug': ''}
 
 # Simplified prompt
-PROMPT = """Genera **solo** flashcards tipo Anki a partir del texto que recibirás.  
-Usa siempre este formato y estilo:
+PROMPT = """Analiza cuidadosamente el siguiente texto. Tu tarea es generar flashcards tipo Anki, agrupadas por tema o subtema. No ignores ninguna parte del texto.
 
-1. Pregunta: ¿…?  
-   Respuesta: <ul><li>…</li><li>…</li></ul>
+Primero, identifica títulos principales o subtítulos si existen. Estos pueden venir en diferentes formas, según el texto que se suba. Algunos ejemplos de títulos o encabezados que debes reconocer:
 
-No agregues nada más (ni títulos, ni explicaciones).  
-No omitas ninguna idea. Cada idea completa del texto es una tarjeta.
+- Números: \"01. Introducción\", \"02. Sepsis\", \"03. Meningitis\"
+- Títulos claros en mayúsculas: \"DIARREA AGUDA\", \"CLASIFICACIÓN DE LA IC\"
+- Secciones sin numerar pero evidentes: \"Fiebre\", \"Tratamiento empírico\", \"Factores de riesgo\"
 
-**Ejemplo de cómo quieres la salida** (a partir de tu texto sobre obesidad):
+Tu objetivo es detectar estos encabezados para agrupar el contenido de forma estructurada. Si el texto no los tiene explícitamente, identifica los temas principales y propón una organización lógica por ideas clave.
 
-1. Pregunta: ¿Cómo se clasifica la obesidad?  
-   Respuesta:
-   <ul>
-     <li>Obesidad exógena o nutricional</li>
-     <li>Obesidad endógena</li>
-   </ul>
+Para cada tema detectado, genera un bloque de flashcards.
 
-2. Pregunta: ¿Qué es obesidad exógena o nutricional?  
-   Respuesta:
-   <ul>
-     <li>La mayoría de las personas obesas son por consumo exógeno y porque gastan pocas calorías.</li>
-     <li>Supone el 95% de todos los casos de obesidad infantil.</li>
-   </ul>
+🔒 IMPORTANTE:
+- NO puedes omitir ninguna frase, oración o sección del texto.
+- CADA IDEA del texto debe convertirse en UNA flashcard.
+- SIEMPRE VE DE MAYOR A MENOR, O SEA SIEMPRE EJEMPLO SI ES UNA CLASIFICACION MENCIONA PRIMERO LA LISTA DE LAS CLASIFICACIONES Y DEFINE LUEGO CADA ITEM
 
-3. Pregunta: ¿Qué es obesidad endógena?  
-   Respuesta:
-   <ul>
-     <li>Relacionada con otras condiciones que favorecen el acumulo de grasa en el organismo o que interfieren con la talla adecuada.</li>
-   </ul>
+Cada flashcard debe seguir esta estructura:
 
-Ahora, con ese mismo formato, genera las tarjetas para este texto:
+---
+[Título del tema principal o subtema]
 
+Pregunta: ¿...?  
+Respuesta: <ul><li>...</li><li>...</li></ul>
+---
+
+REGLAS IMPORTANTES:
+
+1. Si la respuesta contiene varios elementos (como causas, pasos, signos, recomendaciones), exprésalos en una lista HTML con <ul><li>.
+2. Usa <strong> para destacar palabras clave o conceptos importantes dentro de la lista.
+3. No generes párrafos largos. Cada tarjeta debe tener una respuesta breve, bien organizada y útil para estudiar.
+4. Resume con precisión, pero sin omitir ide    as clave. Procesa TODO el contenido, no ignores ninguna sección.
+5. Las preguntas deben ser claras, directas y basadas en el texto.
+6. Agrupa todas las tarjetas por sección para facilitar su importación en mazos jerárquicos.
 """
 
 # HTML template with debug section
@@ -451,7 +452,7 @@ def parse_phi3_output(output):
         progress_data['debug'] = f"Error al parsear respuesta: {e}"
         raise
 
-def dividir_texto(texto, max_chars=3000):
+def dividir_texto(texto, max_chars=1500):
     """Divide el texto en fragmentos sin omitir ideas, intentando no romper párrafos ni perder contenido."""
     logger.info(f"Dividiendo texto de {len(texto)} caracteres en fragmentos de máximo {max_chars}")
     progress_data['debug'] = f"Dividiendo texto en fragmentos de máximo {max_chars} caracteres"
