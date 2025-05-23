@@ -27,8 +27,8 @@ progress_data = {'current': 0, 'total': 0, 'status': 'idle', 'message': '', 'deb
 PROMPT = """Analiza con detalle el texto que te proporcionaré. Tu tarea es generar tarjetas de Anki (flashcards) **sin omitir nada**, **en el mismo orden** en que aparecen los contenidos, y **sin agregar información externa**. 
 
 1. **Detección de secciones y subtemas**  
-   - Reconoce encabezados numéricos (“01. Introducción”, “02. Sepsis”, …).  
-   - Reconoce títulos en mayúsculas (“DIARREA AGUDA”, “CLASIFICACIÓN DE LA IC”).  
+   - Reconoce encabezados numéricos ().  
+   - Reconoce títulos en mayúsculas ().  
    - Si faltan encabezados, agrupa por ideas clave en el orden en que aparecen.
 
 2. **Estructura de salida**  
@@ -37,7 +37,7 @@ PROMPT = """Analiza con detalle el texto que te proporcionaré. Tu tarea es gene
    - No inventes ni reorganices contenido.
 
 3. **Conversión a flashcards**  
-   - **Una idea = 1 flashcard.**  
+   - **Una idea = 1 flashcard. de TODO COMPLETO TODO EL TEXTO ABSOLUTAMENTE TODO, SIN IGNORAR NINGUNA PALABRA**  
    - Para cada flashcard, usa este formato literal:
      
      ---
