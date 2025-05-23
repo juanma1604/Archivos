@@ -39,7 +39,7 @@ PROMPT = """Analiza con detalle el texto que te proporcionaré. Tu tarea es gene
 3. **Conversión a flashcards**  
    - **Una idea = 1 flashcard.**  
    - Para cada flashcard, usa este formato literal:
-     ```
+     
      ---
      [Título de sección o subtítulo]
      Pregunta: ¿...?  
@@ -49,7 +49,7 @@ PROMPT = """Analiza con detalle el texto que te proporcionaré. Tu tarea es gene
        <li>…</li>
      </ul>
      ---
-     ```
+     
    - Si la idea es una lista (causas, pasos, signos, clasificación…), primero pregunta “¿Cuáles son…?” y luego:
      - **Pregunta inicial**: lista completa (e.g. “¿Cuáles son los 3 criterios de…”).  
      - **Sub-siguientes**: una flashcard por cada elemento, definiendo con `<ul><li>…</li></ul>`.
@@ -374,7 +374,7 @@ def call_phi3(prompt, retries=5, initial_delay=1):
             response = requests.post(
                 "http://localhost:11434/api/generate",
         json={
-          "model": "mixtral:8x22b",    # cambia aquí
+          "model": "mixtral:8x7b",    # cambia aquí
           "prompt": prompt,
           "stream": False
         },
