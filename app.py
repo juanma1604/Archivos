@@ -24,50 +24,40 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 progress_data = {'current': 0, 'total': 0, 'status': 'idle', 'message': '', 'debug': ''}
 
 # Simplified prompt
-PROMPT = """Analiza con detalle el texto que te proporcionaré. Tu tarea es generar tarjetas de Anki (flashcards) **sin omitir nada**, **en el mismo orden** en que aparecen los contenidos, y **sin agregar información externa**. 
+PROMPT = """Analiza cuidadosamente el siguiente texto. Tu tarea es generar flashcards tipo Anki, agrupadas por tema o subtema. No ignores ninguna parte del texto.
 
-1. **Detección de secciones y subtemas**  
-   - Reconoce encabezados numéricos ().  
-   - Reconoce títulos en mayúsculas ().  
-   - Si faltan encabezados, agrupa por ideas clave en el orden en que aparecen.
+Primero, identifica títulos principales o subtítulos si existen. Estos pueden venir en diferentes formas, según el texto que se suba. Algunos ejemplos de títulos o encabezados que debes reconocer:
 
-2. **Estructura de salida**  
-   - Cada sección/subtema produce un bloque de flashcards.  
-   - Mantén el **orden original** del texto dentro de cada sección.  
-   - No inventes ni reorganices contenido.
+- Números: \"01. Introducción\", \"02. Sepsis\", \"03. Meningitis\"
+- Títulos claros en mayúsculas: \"DIARREA AGUDA\", \"CLASIFICACIÓN DE LA IC\"
+- Secciones sin numerar pero evidentes: \"Fiebre\", \"Tratamiento empírico\", \"Factores de riesgo\"
 
-3. **Conversión a flashcards**  
-   - **Una idea = 1 flashcard. de TODO COMPLETO TODO EL TEXTO ABSOLUTAMENTE TODO, SIN IGNORAR NINGUNA PALABRA**  
-   - Para cada flashcard, usa este formato literal:
-     
-     ---
-     [Título de sección o subtítulo]
-     Pregunta: ¿...?  
-     Respuesta:
-     <ul>
-       <li>…</li>
-       <li>…</li>
-     </ul>
-     ---
-     
-   - Si la idea es una lista (causas, pasos, signos, clasificación…), primero pregunta “¿Cuáles son…?” y luego:
-     - **Pregunta inicial**: lista completa (e.g. “¿Cuáles son los 3 criterios de…”).  
-     - **Sub-siguientes**: una flashcard por cada elemento, definiendo con `<ul><li>…</li></ul>`.
+Tu objetivo es detectar estos encabezados para agrupar el contenido de forma estructurada. Si el texto no los tiene explícitamente, identifica los temas principales y propón una organización lógica por ideas clave.
 
-4. **Formato y estilo**  
-   - Usa `<strong>` para resaltar términos clave dentro de `<li>`.  
-   - No más de 2–4 ítems por `<ul>`.  
-   - Respuestas concisas: no párrafos largos.  
-   - No agregues explicaciones adicionales ni ejemplos.
+Para cada tema detectado, genera un bloque de flashcards.
 
-5. **Control de calidad**  
-   - Antes de generar, recorre el texto y confirma que cada oración o lista se convertirá en tarjeta.  
-   - Genera primero la flashcard “global” de cada lista/clasificación, y luego las específicas en orden.
+🔒 IMPORTANTE:
+- NO puedes omitir ninguna frase, oración o sección del texto.
+- CADA IDEA del texto debe convertirse en UNA flashcard.
+- SIEMPRE VE DE MAYOR A MENOR, O SEA SIEMPRE EJEMPLO SI ES UNA CLASIFICACION MENCIONA PRIMERO LA LISTA DE LAS CLASIFICACIONES Y DEFINE LUEGO CADA ITEM
+
+Cada flashcard debe seguir esta estructura:
 
 ---
+[Título del tema principal o subtema]
 
-**Ejemplo de salida** (para un subtítulo “Clasificación” con tres ítems A, B, C):
+Pregunta: ¿...?  
+Respuesta: <ul><li>...</li><li>...</li></ul>
+---
 
+REGLAS IMPORTANTES:
+
+1. Si la respuesta contiene varios elementos (como causas, pasos, signos, recomendaciones), exprésalos en una lista HTML con <ul><li>.
+2. Usa <strong> para destacar palabras clave o conceptos importantes dentro de la lista.
+3. No generes párrafos largos. Cada tarjeta debe tener una respuesta breve, bien organizada y útil para estudiar.
+4. Resume con precisión, pero sin omitir ide    as clave. Procesa TODO el contenido, no ignores ninguna sección.
+5. Las preguntas deben ser claras, directas y basadas en el texto.
+6. Agrupa todas las tarjetas por sección para facilitar su importación en mazos jerárquicos.
 """
 
 # HTML template with debug section
@@ -374,7 +364,7 @@ def call_phi3(prompt, retries=5, initial_delay=1):
             response = requests.post(
                 "http://localhost:11434/api/generate",
         json={
-          "model": "mixtral:8x7b",    # cambia aquí
+          "model": "mixtral:8x22b",    # cambia aquí
           "prompt": prompt,
           "stream": False
         },
