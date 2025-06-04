@@ -424,7 +424,7 @@ def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=Non
             response = requests.post(
                 "http://localhost:11434/api/chat",
                 json={
-                    "model": "mixtral:8x22b",
+                    "model": "mixtral:8x7b",
                     "messages": messages,
                     "stream": False,
                 },
