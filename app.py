@@ -1,15 +1,23 @@
-from flask import Flask, request, send_file, render_template_string, jsonify
+from flask import (
+    Flask,
+    request,
+    send_file,
+    render_template_string,
+    jsonify,
+    Response,
+)
 import os
 import pytesseract
 from PIL import Image
 import fitz  # PyMuPDF
 import docx
 import requests
-import textwrap
 import genanki
 import tempfile
 import re
+from collections import OrderedDict
 from pathlib import Path
+import json
 import logging
 import time
 from datetime import datetime
@@ -21,7 +29,17 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 UPLOAD_FOLDER = 'uploads'
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-progress_data = {'current': 0, 'total': 0, 'status': 'idle', 'message': '', 'debug': ''}
+progress_data = {
+    'current': 0,
+    'total': 0,
+    'status': 'idle',
+    'message': '',
+    'debug': '',
+    'partial_cards': {}
+}
+
+# Conversational context for successive calls to Mixtral
+conversation_history = []
 
 # Simplified prompt
 PROMPT = """Analiza cuidadosamente el siguiente texto. Tu tarea es generar flashcards tipo Anki, agrupadas por tema o subtema. No ignores ninguna parte del texto.
@@ -32,9 +50,10 @@ Primero, identifica títulos principales o subtítulos si existen. Estos pueden 
 - Títulos claros en mayúsculas: \"DIARREA AGUDA\", \"CLASIFICACIÓN DE LA IC\"
 - Secciones sin numerar pero evidentes: \"Fiebre\", \"Tratamiento empírico\", \"Factores de riesgo\"
 
-Tu objetivo es detectar estos encabezados para agrupar el contenido de forma estructurada. Si el texto no los tiene explícitamente, identifica los temas principales y propón una organización lógica por ideas clave.
+Tu objetivo es detectar estos encabezados para agrupar el contenido de forma estructurada. Limita el número total de temas a un máximo de seis agrupando subtítulos afines. Si el texto no los tiene explícitamente, identifica los temas principales y propón una organización lógica por ideas clave. Usa "General" si no encuentras un título claro.
+Mantén siempre el mismo orden en que aparecen las ideas en el texto; no reordenes ni combines secciones fuera de su secuencia original.
 
-Para cada tema detectado, genera un bloque de flashcards.
+Para cada tema detectado, genera un bloque de flashcards. No inventes tarjetas sobre información que no esté presente en el texto.
 
 🔒 IMPORTANTE:
 - NO puedes omitir ninguna frase, oración o sección del texto.
@@ -56,8 +75,9 @@ REGLAS IMPORTANTES:
 2. Usa <strong> para destacar palabras clave o conceptos importantes dentro de la lista.
 3. No generes párrafos largos. Cada tarjeta debe tener una respuesta breve, bien organizada y útil para estudiar.
 4. Resume con precisión, pero sin omitir ide    as clave. Procesa TODO el contenido, no ignores ninguna sección.
-5. Las preguntas deben ser claras, directas y basadas en el texto.
+5. Las preguntas deben ser muy cortas, puntuales y basadas en el texto.
 6. Agrupa todas las tarjetas por sección para facilitar su importación en mazos jerárquicos.
+7. Verifica que todas las ideas del texto aparezcan en alguna tarjeta.
 """
 
 # HTML template with debug section
@@ -222,6 +242,7 @@ HTML_TEMPLATE = '''
                 <p><i class="fas fa-upload"></i> Arrastra y suelta tu archivo aquí o haz clic para seleccionar</p>
                 <input type="file" name="file" id="file-input" accept=".pdf,.docx,.txt,.png,.jpg,.jpeg" required style="display: none;">
             </div>
+            <p id="file-name" style="margin-top:10px;"></p>
                 {% if uploaded_filename %}
                 <p style="margin-top:10px;"><strong>Archivo seleccionado:</strong> {{ uploaded_filename }}</p>
             {% endif %}
@@ -234,6 +255,7 @@ HTML_TEMPLATE = '''
         </div>
         <p id="progress-label"></p>
         <div class="debug" id="debug-label"></div>
+        <div id="live-flashcards"></div>
 
         {% if flashcards_by_deck %}
         <h2><i class="fas fa-layer-group"></i> Tarjetas Generadas</h2>
@@ -262,6 +284,7 @@ HTML_TEMPLATE = '''
 
         const uploadArea = document.getElementById('upload-area');
         const fileInput = document.getElementById('file-input');
+        const fileName = document.getElementById('file-name');
         uploadArea.addEventListener('click', () => fileInput.click());
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -274,40 +297,65 @@ HTML_TEMPLATE = '''
             e.preventDefault();
             uploadArea.classList.remove('dragover');
             fileInput.files = e.dataTransfer.files;
+            fileName.innerText = 'Archivo: ' + fileInput.files[0].name;
             document.getElementById('upload-form').submit();
         });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                fileName.innerText = 'Archivo: ' + fileInput.files[0].name;
+            }
+        });
 
-        function updateProgress() {
-            fetch('/progress').then(response => response.json()).then(data => {
-                const bar = document.getElementById('progress-bar');
-                const label = document.getElementById('progress-label');
-                const debugLabel = document.getElementById('debug-label');
-                const container = document.getElementById('progress-container');
-                if (data.total > 0) {
-                    container.style.display = 'block';
-                    const percent = Math.floor((data.current / data.total) * 100);
-                    bar.style.width = percent + '%';
-                    label.innerText = data.status === 'processing' ? `Procesando: ${percent}%` : data.message || '¡Completado!';
-                    debugLabel.innerText = data.debug || 'Esperando acción...';
+        function updateUI(data) {
+            const bar = document.getElementById('progress-bar');
+            const label = document.getElementById('progress-label');
+            const debugLabel = document.getElementById('debug-label');
+            const liveContainer = document.getElementById('live-flashcards');
+            const container = document.getElementById('progress-container');
+            if (data.total > 0) {
+                container.style.display = 'block';
+                const percent = Math.floor((data.current / data.total) * 100);
+                bar.style.width = percent + '%';
+                label.innerText = data.status === 'processing' ? `Procesando: ${percent}%` : data.message || '¡Completado!';
+                debugLabel.innerText = data.debug || 'Esperando acción...';
+                if (data.partial_cards) {
+                    liveContainer.innerHTML = '';
+                    for (const [deck, cards] of Object.entries(data.partial_cards)) {
+                        const title = document.createElement('h3');
+                        title.innerText = `${deck} (${cards.length})`;
+                        liveContainer.appendChild(title);
+                        const deckDiv = document.createElement('div');
+                        deckDiv.classList.add('deck');
+                        cards.forEach(c => {
+                            const card = document.createElement('div');
+                            card.classList.add('flashcard');
+                            card.innerHTML = `<strong>${c[0]}</strong><div class="answer">${c[1]}</div>`;
+                            card.addEventListener('click', () => card.classList.toggle('active'));
+                            deckDiv.appendChild(card);
+                        });
+                        liveContainer.appendChild(deckDiv);
+                    }
                 }
-                if (data.status === 'processing') {
-                    setTimeout(updateProgress, 1000);
-                } else if (data.status === 'error') {
-                    label.innerText = data.message;
-                    debugLabel.innerText = data.debug;
-                    container.style.display = 'none';
-                }
-            }).catch(err => {
-                console.error('Error fetching progress:', err);
-                document.getElementById('progress-label').innerText = 'Error al actualizar el progreso';
-                document.getElementById('debug-label').innerText = 'Error de conexión con el servidor';
-            });
+            }
+            if (data.status === 'error') {
+                label.innerText = data.message;
+                debugLabel.innerText = data.debug;
+                container.style.display = 'none';
+            }
         }
 
+        let eventSource;
         document.getElementById('upload-form').addEventListener('submit', () => {
             document.getElementById('progress-label').innerText = 'Iniciando procesamiento...';
             document.getElementById('debug-label').innerText = 'Preparando archivo...';
-            setTimeout(updateProgress, 500);
+            if (eventSource) {
+                eventSource.close();
+            }
+            eventSource = new EventSource('/stream');
+            eventSource.onmessage = (e) => {
+                const data = JSON.parse(e.data);
+                updateUI(data);
+            };
         });
     </script>
 </body>
@@ -349,31 +397,52 @@ def extract_text(file_path):
         progress_data['debug'] = f"Error al extraer texto: {e}"
         raise
 
-def call_phi3(prompt, retries=5, initial_delay=1):
-    """Llama a la API de Phi3 con reintentos."""
+def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=None):
+    """Llama a la API de Phi3 utilizando un historial conversacional."""
+    if reset:
+        conversation_history.clear()
+        if system_prompt:
+            conversation_history.append({"role": "system", "content": system_prompt})
+
     logger.info(f"Enviando prompt a la API de Phi3 (longitud: {len(prompt)} caracteres)")
     prompt_summary = prompt[:100] + ("..." if len(prompt) > 100 else "")
-    progress_data['debug'] = f"Enviando prompt al modelo Phi3 ({len(prompt)} caracteres)\nResumen: {prompt_summary}"
-    
+    progress_data['debug'] = (
+        f"Enviando prompt al modelo Phi3 ({len(prompt)} caracteres)\nResumen: {prompt_summary}"
+    )
+
     # Save prompt to prompts_log.txt
     with open('prompts_log.txt', 'a', encoding='utf-8') as f:
-        f.write(f"[{datetime.now()}] Prompt enviado ({len(prompt)} caracteres):\n{prompt}\n\n")
-    
+        if reset and system_prompt:
+            f.write(f"[{datetime.now()}] Sistema:\n{system_prompt}\n\n")
+        f.write(f"[{datetime.now()}] Usuario:\n{prompt}\n\n")
+
+    conversation_history.append({'role': 'user', 'content': prompt})
+    messages = conversation_history[-10:]
+
     for attempt in range(retries):
         try:
             response = requests.post(
-                "http://localhost:11434/api/generate",
-        json={
-          "model": "mixtral:8x22b",    # cambia aquí
-          "prompt": prompt,
-          "stream": False
-        },
-                timeout=240
+                "http://localhost:11434/api/chat",
+                json={
+                    "model": "mixtral:8x22b",
+                    "messages": messages,
+                    "stream": False,
+                },
+                timeout=240,
             )
             response.raise_for_status()
+            data = response.json()
             logger.info("Respuesta exitosa de la API de Phi3")
             progress_data['debug'] = "Respuesta recibida del modelo Phi3"
-            return response.json()['response']
+            assistant_reply = (
+                data.get('message', {}).get('content')
+                if isinstance(data, dict)
+                else ''
+            ) or data.get('response', '')
+            conversation_history.append({'role': 'assistant', 'content': assistant_reply})
+            if len(conversation_history) > 10:
+                del conversation_history[:-10]
+            return assistant_reply
         except requests.RequestException as e:
             logger.error(f"Intento {attempt + 1}/{retries} fallido: {e}")
             progress_data['debug'] = f"Error en intento {attempt + 1}/{retries}: {e}"
@@ -423,59 +492,95 @@ def parse_phi3_output(output):
     logger.info("Parseando salida de Phi3")
     progress_data['debug'] = "Parseando respuesta del modelo"
     try:
-        flashcards = {}
-        current_deck = None
+        flashcards = OrderedDict()
+        current_deck = "General"
         lines = output.strip().split('\n')
         question = ""
         answer = ""
+        q_pattern = re.compile(r'^(?:preg(?:unta)?|question|q)\s*[:\-]?\s*(.*)', re.I)
+        a_pattern = re.compile(r'^(?:resp(?:uesta)?|answer|a)\s*[:\-]?\s*(.*)', re.I)
+        heading_pattern = re.compile(r'^(?:\d{1,2}\.|[IVX]+\.)?\s*[A-ZÁÉÍÓÚÜÑ0-9 ,.:-]+$', re.I)
+
         for line in lines:
             line = line.strip()
-            if line.startswith('---'):
+            if not line or line.startswith('---'):
                 continue
-            if not line:
+
+            q_match = q_pattern.match(line)
+            a_match = a_pattern.match(line)
+
+            if q_match:
+                question = q_match.group(1).strip()
                 continue
-            if not question and line.startswith('Pregunta:'):
-                question = line.replace('Pregunta:', '').strip()
-            elif question and line.startswith('Respuesta:'):
-                answer = line.replace('Respuesta:', '').strip()
-            elif question and answer:
-                if current_deck:
-                    flashcards.setdefault(current_deck, []).append((question, answer))
+            if a_match and question:
+                answer = a_match.group(1).strip()
+                flashcards.setdefault(current_deck, []).append((question, answer))
                 question, answer = "", ""
-            elif not question and not answer:
-                current_deck = line
-        logger.info(f"Flashcards parseadas: {len(flashcards)} mazos")
-        progress_data['debug'] = f"Flashcards parseadas: {len(flashcards)} mazos"
+                continue
+
+            # Si la línea parece un encabezado, la usamos como nombre de mazo
+            if not question and not answer and heading_pattern.match(line):
+                current_deck = line.rstrip(':').strip() or "General"
+
+        logger.info(f"Flashcards parseadas: {sum(len(v) for v in flashcards.values())} tarjetas")
+        progress_data['debug'] = f"Flashcards parseadas: {sum(len(v) for v in flashcards.values())} tarjetas"
         return flashcards
     except Exception as e:
         logger.error(f"Error al parsear salida de Phi3: {e}")
         progress_data['debug'] = f"Error al parsear respuesta: {e}"
         raise
 
+def limit_decks(cards_by_deck, max_decks=6):
+    """Reduce el número de mazos manteniendo el orden.
+
+    Si existen más de ``max_decks`` se fusionan los excedentes en un mazo
+    llamado ``General`` colocado en la posición donde aparecería el primer
+    mazo descartado. De esta manera se respeta la secuencia original del
+    documento.
+    """
+    if len(cards_by_deck) <= max_decks:
+        return OrderedDict(cards_by_deck)
+
+    trimmed = OrderedDict()
+    extras = []
+    inserted_general = False
+    for i, (name, cards) in enumerate(cards_by_deck.items()):
+        if i < max_decks - 1:
+            trimmed[name] = cards
+        else:
+            extras.extend(cards)
+            if not inserted_general:
+                trimmed['General'] = []
+                inserted_general = True
+
+    trimmed['General'].extend(extras)
+    return trimmed
+
 def dividir_texto(texto, max_chars=1500):
-    """Divide el texto en fragmentos sin omitir ideas, intentando no romper párrafos ni perder contenido."""
+    """Divide el texto en fragmentos procurando no cortar oraciones."""
     logger.info(f"Dividiendo texto de {len(texto)} caracteres en fragmentos de máximo {max_chars}")
     progress_data['debug'] = f"Dividiendo texto en fragmentos de máximo {max_chars} caracteres"
     try:
         chunks = []
         current_chunk = ""
 
-        paragraphs = texto.split('\n\n')
+        paragraphs = [p.strip() for p in texto.split('\n\n') if p.strip()]
 
         for para in paragraphs:
-            para = para.strip()
-            if not para:
-                continue
             if len(para) > max_chars:
-                # Si el párrafo es demasiado largo, lo dividimos por oraciones o saltos de línea
-                subparts = textwrap.wrap(para, width=max_chars, break_long_words=False, break_on_hyphens=False)
-                for sub in subparts:
-                    chunks.append(sub.strip())
-            elif len(current_chunk) + len(para) + 2 < max_chars:
-                current_chunk += para + "\n\n"
+                sentences = re.split(r'(?<=[.!?])\s+', para)
+                for sent in sentences:
+                    if len(current_chunk) + len(sent) + 1 > max_chars:
+                        if current_chunk.strip():
+                            chunks.append(current_chunk.strip())
+                            current_chunk = ""
+                    current_chunk += sent + " "
             else:
-                chunks.append(current_chunk.strip())
-                current_chunk = para + "\n\n"
+                if len(current_chunk) + len(para) + 2 > max_chars:
+                    if current_chunk.strip():
+                        chunks.append(current_chunk.strip())
+                        current_chunk = ""
+                current_chunk += para + "\n\n"
 
         if current_chunk.strip():
             chunks.append(current_chunk.strip())
@@ -490,10 +595,28 @@ def dividir_texto(texto, max_chars=1500):
         raise
 
 
+def quality_check(chunks, cards_by_deck):
+    """Comprueba que cada fragmento tenga al menos una tarjeta asociada."""
+    import difflib
+
+    all_cards = [
+        (q.lower() + " " + a.lower())
+        for cards in cards_by_deck.values()
+        for q, a in cards
+    ]
+    missing = []
+    for i, chunk in enumerate(chunks):
+        snippet = chunk.strip()[:80].lower()
+        found = any(difflib.SequenceMatcher(None, snippet, text).ratio() > 0.2 for text in all_cards)
+        if not found:
+            missing.append(i + 1)
+    return missing
+
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     """Ruta principal para la interfaz y procesamiento de archivos."""
-    flashcards_by_deck = {}
+    flashcards_by_deck = OrderedDict()
     download_url = None
     error = None
 
@@ -526,17 +649,27 @@ def index():
                     progress_data['current'] = 0
                     progress_data['status'] = 'processing'
                     progress_data['message'] = 'Procesando archivo...'
+                    progress_data['partial_cards'] = {}
                     logger.info(f"Procesando {len(chunks)} fragmentos de texto")
+
+                    missing_chunks = []
 
                     for i, chunk in enumerate(chunks):
                         logger.info(f"Enviando fragmento {i+1}/{len(chunks)} a la API")
                         progress_data['debug'] = f"Enviando fragmento {i+1}/{len(chunks)} al modelo"
-                        full_prompt = PROMPT + "\n\n" + chunk
                         try:
-                            ai_output = call_phi3(full_prompt)
+                            if i == 0:
+                                ai_output = call_phi3(chunk, reset=True, system_prompt=PROMPT)
+                            else:
+                                ai_output = call_phi3(chunk)
                             partial_cards = parse_phi3_output(ai_output)
+                            if not any(partial_cards.values()):
+                                logger.warning(f"Fragmento {i+1} no generó tarjetas")
+                                progress_data['debug'] = f"Fragmento {i+1} sin tarjetas"
+                                missing_chunks.append(i + 1)
                             for deck, cards in partial_cards.items():
                                 flashcards_by_deck.setdefault(deck, []).extend(cards)
+                            progress_data['partial_cards'] = flashcards_by_deck
                             progress_data['current'] = i + 1
                             logger.info(f"Fragmento {i+1} procesado exitosamente")
                         except Exception as e:
@@ -544,16 +677,41 @@ def index():
                             progress_data['debug'] = f"Error procesando fragmento {i+1}: {e}"
                             raise
 
-                    progress_data['status'] = 'completed'
-                    progress_data['message'] = '¡Tarjetas generadas!'
-                    progress_data['debug'] = 'Generación de tarjetas completada'
-                    logger.info(f"Tarjetas generadas: {sum(len(cards) for cards in flashcards_by_deck.values())} en total")
+                    total_cards = sum(len(cards) for cards in flashcards_by_deck.values())
+                    if missing_chunks:
+                        error = f"No se generaron tarjetas para {len(missing_chunks)} fragmentos"
+                        progress_data['status'] = 'error'
+                        progress_data['message'] = error
+                        progress_data['debug'] = f"Fragmentos sin tarjetas: {missing_chunks}"
+                        progress_data['partial_cards'] = flashcards_by_deck
+                        logger.warning(error)
+                    elif total_cards == 0:
+                        error = "No se generaron flashcards a partir del texto."
+                        progress_data['status'] = 'error'
+                        progress_data['message'] = error
+                        progress_data['debug'] = 'Sin tarjetas generadas'
+                        progress_data['partial_cards'] = flashcards_by_deck
+                        logger.warning(error)
+                    else:
+                        missing_after = quality_check(chunks, flashcards_by_deck)
+                        if missing_after:
+                            logger.warning(f"Fragmentos sin cobertura clara: {missing_after}")
+                            progress_data['debug'] = f"Faltan cubrir: {missing_after}"
 
-                    out_path = os.path.join(tempfile.gettempdir(), f"{filename}.apkg")
-                    create_anki_apkg(flashcards_by_deck, out_path)
-                    download_url = f"/download/{os.path.basename(out_path)}"
-                    logger.info(f"Archivo .apkg disponible para descargar: {out_path}")
-                    progress_data['debug'] = f"Archivo .apkg creado: {os.path.basename(out_path)}"
+                        progress_data['status'] = 'completed'
+                        progress_data['message'] = '¡Tarjetas generadas!'
+                        progress_data['debug'] = 'Generación de tarjetas completada'
+                        logger.info(f"Tarjetas generadas: {total_cards} en total")
+
+                        progress_data['partial_cards'] = flashcards_by_deck
+
+                        flashcards_by_deck = limit_decks(flashcards_by_deck)
+                        progress_data['partial_cards'] = flashcards_by_deck
+                        out_path = os.path.join(tempfile.gettempdir(), f"{filename}.apkg")
+                        create_anki_apkg(flashcards_by_deck, out_path)
+                        download_url = f"/download/{os.path.basename(out_path)}"
+                        logger.info(f"Archivo .apkg disponible para descargar: {out_path}")
+                        progress_data['debug'] = f"Archivo .apkg creado: {os.path.basename(out_path)}"
 
             except Exception as e:
                 error = f"Error al procesar el archivo: {str(e)}"
@@ -581,6 +739,20 @@ def progress():
     """Devuelve el estado del progreso."""
     logger.debug(f"Estado del progreso: {progress_data}")
     return jsonify(progress_data)
+
+@app.route("/stream")
+def stream():
+    """Envía actualizaciones de progreso en tiempo real mediante SSE."""
+    def event_stream():
+        last = None
+        while True:
+            data = json.dumps(progress_data)
+            if data != last:
+                yield f"data: {data}\n\n"
+                last = data
+            time.sleep(1)
+
+    return Response(event_stream(), mimetype="text/event-stream")
 
 @app.route("/download/<filename>")
 def download_file(filename):
