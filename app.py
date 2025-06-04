@@ -271,7 +271,9 @@ HTML_TEMPLATE = '''
                 {% endfor %}
             </div>
         {% endfor %}
+        {% if download_url %}
         <a href="{{ download_url }}" class="button"><i class="fas fa-download"></i> Descargar .apkg</a>
+        {% endif %}
         {% endif %}
     </div>
 
@@ -662,7 +664,7 @@ def quality_check(chunks, cards_by_deck):
 def index():
     """Ruta principal para la interfaz y procesamiento de archivos."""
     flashcards_by_deck = OrderedDict()
-    download_url = None
+    download_url = ""
     error = None
 
     if request.method == "POST":
