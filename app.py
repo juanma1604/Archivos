@@ -709,9 +709,25 @@ def index():
                                 ai_output = call_phi3(chunk)
                             partial_cards = parse_phi3_output(ai_output)
                             if not any(partial_cards.values()):
-                                logger.warning(f"Fragmento {i+1} no generó tarjetas")
-                                progress_data['debug'] = f"Fragmento {i+1} sin tarjetas"
-                                missing_chunks.append(i + 1)
+                                logger.warning(
+                                    f"Fragmento {i+1} no generó tarjetas, reintentando"
+                                )
+                                progress_data['debug'] = (
+                                    f"Fragmento {i+1} sin tarjetas, reintentando"
+                                )
+                                # Retry with fresh context in case the modelo perdió el hilo
+                                ai_output = call_phi3(
+                                    chunk, reset=True, system_prompt=PROMPT
+                                )
+                                partial_cards = parse_phi3_output(ai_output)
+                                if not any(partial_cards.values()):
+                                    logger.warning(
+                                        f"Fragmento {i+1} sin tarjetas tras reintento"
+                                    )
+                                    progress_data['debug'] = (
+                                        f"Fragmento {i+1} falló tras reintento"
+                                    )
+                                    missing_chunks.append(i + 1)
                             for deck, cards in partial_cards.items():
                                 flashcards_by_deck.setdefault(deck, []).extend(cards)
                             progress_data['partial_cards'] = flashcards_by_deck
