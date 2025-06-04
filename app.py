@@ -401,11 +401,12 @@ def extract_text(file_path):
         raise
 
 def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=None):
-    """Llama a la API de Phi3 utilizando un historial conversacional."""
+    """Llama a la API de Phi3 manteniendo el contexto y el prompt del sistema."""
+    if system_prompt is None:
+        system_prompt = PROMPT
+
     if reset:
         conversation_history.clear()
-        if system_prompt:
-            conversation_history.append({"role": "system", "content": system_prompt})
 
     logger.info(f"Enviando prompt a la API de Phi3 (longitud: {len(prompt)} caracteres)")
     prompt_summary = prompt[:100] + ("..." if len(prompt) > 100 else "")
@@ -420,7 +421,7 @@ def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=Non
         f.write(f"[{datetime.now()}] Usuario:\n{prompt}\n\n")
 
     conversation_history.append({'role': 'user', 'content': prompt})
-    messages = conversation_history[-10:]
+    messages = [{'role': 'system', 'content': system_prompt}] + conversation_history[-10:]
 
     for attempt in range(retries):
         try:
@@ -705,10 +706,7 @@ def index():
                         logger.info(f"Enviando fragmento {i+1}/{len(chunks)} a la API")
                         progress_data['debug'] = f"Enviando fragmento {i+1}/{len(chunks)} al modelo"
                         try:
-                            if i == 0:
-                                ai_output = call_phi3(chunk, reset=True, system_prompt=PROMPT)
-                            else:
-                                ai_output = call_phi3(chunk)
+                            ai_output = call_phi3(chunk, reset=(i == 0), system_prompt=PROMPT)
                             partial_cards = parse_phi3_output(ai_output)
                             if not any(partial_cards.values()):
                                 logger.warning(
