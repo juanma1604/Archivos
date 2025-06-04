@@ -53,7 +53,7 @@ Primero, identifica títulos principales o subtítulos si existen. Estos pueden 
 Tu objetivo es detectar estos encabezados para agrupar el contenido de forma estructurada. Limita el número total de temas a un máximo de seis agrupando subtítulos afines. Si el texto no los tiene explícitamente, identifica los temas principales y propón una organización lógica por ideas clave. Usa "General" si no encuentras un título claro.
 Mantén siempre el mismo orden en que aparecen las ideas en el texto; no reordenes ni combines secciones fuera de su secuencia original.
 
-Para cada tema detectado, genera un bloque de flashcards. No inventes tarjetas sobre información que no esté presente en el texto. Si un párrafo contiene muchas ideas, divide el contenido en varias tarjetas pequeñas.
+Para cada tema detectado, genera un bloque de flashcards. No inventes tarjetas sobre información que no esté presente en el texto. Si un párrafo contiene muchas ideas, divide el contenido en varias tarjetas pequeñas. Cada tarjeta debe usar exactamente las etiquetas "Pregunta:" y "Respuesta:" para marcar las líneas de pregunta y respuesta.
 
 🔒 IMPORTANTE:
 - NO puedes omitir ninguna frase, oración o sección del texto.
@@ -71,14 +71,15 @@ Respuesta: <ul><li>...</li><li>...</li></ul>
 
 REGLAS IMPORTANTES:
 
-1. Si la respuesta contiene varios elementos (como causas, pasos, signos, recomendaciones), exprésalos en una lista HTML con <ul><li>.
-2. Usa <strong> para destacar palabras clave o conceptos importantes dentro de la lista y separa ideas cortas con <br> si no forman una lista.
+1. Si la respuesta contiene varios elementos, usa siempre <ul><li> para cada elemento, evita las enumeraciones con comas.
+2. Usa <strong> para destacar palabras clave o conceptos importantes dentro de la lista y separa ideas cortas con <br> cuando no haya lista.
 3. No generes párrafos largos. Las respuestas deben ser concisas excepto en casos de criterios diagnósticos o listados importantes.
 4. Resume con precisión, pero sin omitir ideas clave. Procesa TODO el contenido, no ignores ninguna sección.
 5. Las preguntas deben ser muy cortas, puntuales y basadas en el texto. Si un concepto es largo, divide en varias tarjetas.
 6. Agrupa todas las tarjetas por sección para facilitar su importación en mazos jerárquicos.
 7. Verifica que todas las ideas del texto aparezcan en alguna tarjeta.
 8. Evita los párrafos: responde siempre con listas <ul><li> o frases cortas separadas por <br>.
+9. Empieza cada pregunta con "Pregunta:" y cada respuesta con "Respuesta:" para facilitar el parseo.
 """
 
 # HTML template with debug section
@@ -541,6 +542,12 @@ def parse_phi3_output(output):
             r'^(?:\d{1,2}\.|[IVX]+\.)?\s*[A-ZÁÉÍÓÚÜÑ0-9][A-ZÁÉÍÓÚÜÑ0-9 ,.:-]*$', re.I
         )
 
+        def finalize_card():
+            if question and answer_lines:
+                flashcards.setdefault(current_deck, []).append(
+                    (question, "<br>".join(answer_lines).strip())
+                )
+
         for line in lines:
             line = line.strip()
             if not line or line.startswith('---'):
@@ -550,31 +557,35 @@ def parse_phi3_output(output):
             a_match = a_pattern.match(line)
 
             if q_match:
-                if question and answer_lines:
-                    flashcards.setdefault(current_deck, []).append(
-                        (question, " ".join(answer_lines).strip())
-                    )
+                finalize_card()
                 question = q_match.group(1).strip()
+                answer_lines = []
+                collecting = False
+                continue
+            if line.endswith('?') and not collecting and not question:
+                finalize_card()
+                question = line
                 answer_lines = []
                 collecting = False
                 continue
             if a_match and question:
                 if collecting and answer_lines:
-                    flashcards.setdefault(current_deck, []).append(
-                        (question, " ".join(answer_lines).strip())
-                    )
+                    finalize_card()
                     question = ""
                     answer_lines = []
                 answer_lines = [a_match.group(1).strip()]
+                collecting = True
+                continue
+            bullet_start = line.startswith('<ul>') or line.startswith('<li>') or line.startswith('•') or line.startswith('* ')
+            if bullet_start and question and not collecting:
+                answer_lines = [line]
                 collecting = True
                 continue
             if collecting:
                 next_q = q_pattern.match(line)
                 next_a = a_pattern.match(line)
                 if (next_q or next_a or heading_pattern.match(line)) and answer_lines:
-                    flashcards.setdefault(current_deck, []).append(
-                        (question, " ".join(answer_lines).strip())
-                    )
+                    finalize_card()
                     if heading_pattern.match(line) and not next_q and not next_a:
                         question = ""
                         answer_lines = []
@@ -594,10 +605,7 @@ def parse_phi3_output(output):
             if not collecting and not question and heading_pattern.match(line):
                 current_deck = line.rstrip(':').strip() or "General"
 
-        if question and answer_lines:
-            flashcards.setdefault(current_deck, []).append(
-                (question, " ".join(answer_lines).strip())
-            )
+        finalize_card()
 
         logger.info(f"Flashcards parseadas: {sum(len(v) for v in flashcards.values())} tarjetas")
         progress_data['debug'] = f"Flashcards parseadas: {sum(len(v) for v in flashcards.values())} tarjetas"
