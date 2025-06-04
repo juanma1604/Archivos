@@ -78,6 +78,7 @@ REGLAS IMPORTANTES:
 5. Las preguntas deben ser muy cortas, puntuales y basadas en el texto. Si un concepto es largo, divide en varias tarjetas.
 6. Agrupa todas las tarjetas por sección para facilitar su importación en mazos jerárquicos.
 7. Verifica que todas las ideas del texto aparezcan en alguna tarjeta.
+8. Evita los párrafos: responde siempre con listas <ul><li> o frases cortas separadas por <br>.
 """
 
 # HTML template with debug section
@@ -498,9 +499,15 @@ def parse_phi3_output(output):
         question = ""
         answer_lines = []
         collecting = False
-        q_pattern = re.compile(r'^(?:preg(?:unta)?|question|q)\s*[:\-]?\s*(.*)', re.I)
-        a_pattern = re.compile(r'^(?:resp(?:uesta)?|answer|a)\s*[:\-]?\s*(.*)', re.I)
-        heading_pattern = re.compile(r'^(?:\d{1,2}\.|[IVX]+\.)?\s*[A-ZÁÉÍÓÚÜÑ0-9 ,.:-]+$', re.I)
+        q_pattern = re.compile(
+            r'^(?:p(?:regunta)?|question|q)\.?\s*[:\-]?\s*(.*)', re.I
+        )
+        a_pattern = re.compile(
+            r'^(?:r(?:espuesta)?|answer|a)\.?\s*[:\-]?\s*(.*)', re.I
+        )
+        heading_pattern = re.compile(
+            r'^(?:\d{1,2}\.|[IVX]+\.)?\s*[A-ZÁÉÍÓÚÜÑ0-9][A-ZÁÉÍÓÚÜÑ0-9 ,.:-]*$', re.I
+        )
 
         for line in lines:
             line = line.strip()
@@ -738,6 +745,12 @@ def index():
                         logger.info(f"Tarjetas generadas: {total_cards} en total")
 
                         progress_data['partial_cards'] = flashcards_by_deck
+
+                        # Control de calidad: verificar cobertura del texto
+                        qc_missing = quality_check(chunks, flashcards_by_deck)
+                        if qc_missing:
+                            progress_data['debug'] += f"\nFragmentos sin cobertura: {qc_missing}"
+                            logger.warning(f"Fragmentos sin cobertura detectados: {qc_missing}")
 
                         flashcards_by_deck = limit_decks(flashcards_by_deck)
                         progress_data['partial_cards'] = flashcards_by_deck
