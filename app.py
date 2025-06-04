@@ -38,9 +38,6 @@ progress_data = {
     'partial_cards': {}
 }
 
-# Conversational context for successive calls to Mixtral
-conversation_history = []
-
 # Simplified prompt
 PROMPT = """Analiza cuidadosamente el siguiente texto. Tu tarea es generar flashcards tipo Anki, agrupadas por tema o subtema. No ignores ninguna parte del texto.
 
@@ -401,13 +398,10 @@ def extract_text(file_path):
         progress_data['debug'] = f"Error al extraer texto: {e}"
         raise
 
-def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=None):
-    """Llama a la API de Phi3 manteniendo el contexto y el prompt del sistema."""
+def call_phi3(prompt, retries=5, initial_delay=1, system_prompt=None):
+    """Envía el prompt a la API de Mixtral sin historial de conversación."""
     if system_prompt is None:
         system_prompt = PROMPT
-
-    if reset:
-        conversation_history.clear()
 
     logger.info(f"Enviando prompt a la API de Phi3 (longitud: {len(prompt)} caracteres)")
     prompt_summary = prompt[:100] + ("..." if len(prompt) > 100 else "")
@@ -415,14 +409,14 @@ def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=Non
         f"Enviando prompt al modelo Phi3 ({len(prompt)} caracteres)\nResumen: {prompt_summary}"
     )
 
-    # Save prompt to prompts_log.txt
     with open('prompts_log.txt', 'a', encoding='utf-8') as f:
-        if reset and system_prompt:
-            f.write(f"[{datetime.now()}] Sistema:\n{system_prompt}\n\n")
+        f.write(f"[{datetime.now()}] Sistema:\n{system_prompt}\n\n")
         f.write(f"[{datetime.now()}] Usuario:\n{prompt}\n\n")
 
-    conversation_history.append({'role': 'user', 'content': prompt})
-    messages = [{'role': 'system', 'content': system_prompt}] + conversation_history[-10:]
+    messages = [
+        {'role': 'system', 'content': system_prompt},
+        {'role': 'user', 'content': prompt},
+    ]
 
     for attempt in range(retries):
         try:
@@ -444,18 +438,12 @@ def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=Non
                 if isinstance(data, dict)
                 else ''
             ) or data.get('response', '')
-            conversation_history.append({'role': 'assistant', 'content': assistant_reply})
-            if len(conversation_history) > 10:
-                del conversation_history[:-10]
             return assistant_reply
         except requests.RequestException as e:
             logger.error(f"/chat failed on attempt {attempt + 1}: {e}")
             progress_data['debug'] = f"Fallo /chat: {e}. Probando /generate"
-            # Fallback to /api/generate with a flattened prompt
-            convo_text = system_prompt + "\n"
-            for m in conversation_history[-10:]:
-                prefix = "Usuario" if m['role'] == 'user' else "Asistente"
-                convo_text += f"{prefix}: {m['content']}\n"
+            # Fallback to /api/generate con el prompt plano
+            convo_text = system_prompt + "\n" + prompt
             try:
                 response = requests.post(
                     "http://localhost:11434/api/generate",
@@ -469,9 +457,6 @@ def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=Non
                 response.raise_for_status()
                 data = response.json()
                 assistant_reply = data.get("response", "")
-                conversation_history.append({"role": "assistant", "content": assistant_reply})
-                if len(conversation_history) > 10:
-                    del conversation_history[:-10]
                 logger.info("Respuesta exitosa de la API de Phi3 (/generate)")
                 progress_data['debug'] = "Respuesta recibida del modelo Phi3"
                 return assistant_reply
@@ -743,7 +728,7 @@ def index():
                         logger.info(f"Enviando fragmento {i+1}/{len(chunks)} a la API")
                         progress_data['debug'] = f"Enviando fragmento {i+1}/{len(chunks)} al modelo"
                         try:
-                            ai_output = call_phi3(chunk, reset=(i == 0), system_prompt=PROMPT)
+                            ai_output = call_phi3(chunk, system_prompt=PROMPT)
                             partial_cards = parse_phi3_output(ai_output)
                             if not any(partial_cards.values()):
                                 logger.warning(
@@ -754,7 +739,7 @@ def index():
                                 )
                                 # Retry with fresh context in case the modelo perdió el hilo
                                 ai_output = call_phi3(
-                                    chunk, reset=True, system_prompt=PROMPT
+                                    chunk, system_prompt=PROMPT
                                 )
                                 partial_cards = parse_phi3_output(ai_output)
                                 if not any(partial_cards.values()):
