@@ -716,14 +716,7 @@ def index():
                             raise
 
                     total_cards = sum(len(cards) for cards in flashcards_by_deck.values())
-                    if missing_chunks:
-                        error = f"No se generaron tarjetas para {len(missing_chunks)} fragmentos"
-                        progress_data['status'] = 'error'
-                        progress_data['message'] = error
-                        progress_data['debug'] = f"Fragmentos sin tarjetas: {missing_chunks}"
-                        progress_data['partial_cards'] = flashcards_by_deck
-                        logger.warning(error)
-                    elif total_cards == 0:
+                    if total_cards == 0:
                         error = "No se generaron flashcards a partir del texto."
                         progress_data['status'] = 'error'
                         progress_data['message'] = error
@@ -731,14 +724,17 @@ def index():
                         progress_data['partial_cards'] = flashcards_by_deck
                         logger.warning(error)
                     else:
-                        missing_after = quality_check(chunks, flashcards_by_deck)
-                        if missing_after:
-                            logger.warning(f"Fragmentos sin cobertura clara: {missing_after}")
-                            progress_data['debug'] = f"Faltan cubrir: {missing_after}"
+                        if missing_chunks:
+                            progress_data['message'] = (
+                                f"Generación completada con advertencias: {len(missing_chunks)} fragmentos sin tarjetas"
+                            )
+                            progress_data['debug'] = f"Fragmentos sin tarjetas: {missing_chunks}"
+                            logger.warning(progress_data['message'])
+                        else:
+                            progress_data['message'] = '¡Tarjetas generadas!'
+                            progress_data['debug'] = 'Generación de tarjetas completada'
 
                         progress_data['status'] = 'completed'
-                        progress_data['message'] = '¡Tarjetas generadas!'
-                        progress_data['debug'] = 'Generación de tarjetas completada'
                         logger.info(f"Tarjetas generadas: {total_cards} en total")
 
                         progress_data['partial_cards'] = flashcards_by_deck
@@ -749,7 +745,7 @@ def index():
                         create_anki_apkg(flashcards_by_deck, out_path)
                         download_url = f"/download/{os.path.basename(out_path)}"
                         logger.info(f"Archivo .apkg disponible para descargar: {out_path}")
-                        progress_data['debug'] = f"Archivo .apkg creado: {os.path.basename(out_path)}"
+                        progress_data['debug'] += f"\nArchivo .apkg creado: {os.path.basename(out_path)}"
 
             except Exception as e:
                 error = f"Error al procesar el archivo: {str(e)}"
