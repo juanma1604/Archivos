@@ -436,7 +436,7 @@ def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=Non
             )
             response.raise_for_status()
             data = response.json()
-            logger.info("Respuesta exitosa de la API de Phi3")
+            logger.info("Respuesta exitosa de la API de Phi3 (/chat)")
             progress_data['debug'] = "Respuesta recibida del modelo Phi3"
             assistant_reply = (
                 data.get('message', {}).get('content')
@@ -448,15 +448,44 @@ def call_phi3(prompt, retries=5, initial_delay=1, reset=False, system_prompt=Non
                 del conversation_history[:-10]
             return assistant_reply
         except requests.RequestException as e:
-            logger.error(f"Intento {attempt + 1}/{retries} fallido: {e}")
-            progress_data['debug'] = f"Error en intento {attempt + 1}/{retries}: {e}"
-            if attempt < retries - 1:
-                delay = initial_delay * (2 ** attempt)
-                logger.info(f"Reintentando en {delay} segundos...")
-                time.sleep(delay)
-            else:
-                logger.error(f"Fallo después de {retries} intentos")
-                raise Exception(f"Error al conectar con la API de Phi3 después de {retries} intentos: {e}")
+            logger.error(f"/chat failed on attempt {attempt + 1}: {e}")
+            progress_data['debug'] = f"Fallo /chat: {e}. Probando /generate"
+            # Fallback to /api/generate with a flattened prompt
+            convo_text = system_prompt + "\n"
+            for m in conversation_history[-10:]:
+                prefix = "Usuario" if m['role'] == 'user' else "Asistente"
+                convo_text += f"{prefix}: {m['content']}\n"
+            try:
+                response = requests.post(
+                    "http://localhost:11434/api/generate",
+                    json={
+                        "model": "mixtral:8x22b",
+                        "prompt": convo_text,
+                        "stream": False,
+                    },
+                    timeout=240,
+                )
+                response.raise_for_status()
+                data = response.json()
+                assistant_reply = data.get("response", "")
+                conversation_history.append({"role": "assistant", "content": assistant_reply})
+                if len(conversation_history) > 10:
+                    del conversation_history[:-10]
+                logger.info("Respuesta exitosa de la API de Phi3 (/generate)")
+                progress_data['debug'] = "Respuesta recibida del modelo Phi3"
+                return assistant_reply
+            except requests.RequestException as e2:
+                logger.error(f"Intento {attempt + 1}/{retries} fallido: {e2}")
+                progress_data['debug'] = f"Error en intento {attempt + 1}/{retries}: {e2}"
+                if attempt < retries - 1:
+                    delay = initial_delay * (2 ** attempt)
+                    logger.info(f"Reintentando en {delay} segundos...")
+                    time.sleep(delay)
+                else:
+                    logger.error(f"Fallo después de {retries} intentos")
+                    raise Exception(
+                        f"Error al conectar con la API de Phi3 después de {retries} intentos: {e2}"
+                    )
 
 def create_anki_apkg(flashcards_by_deck, output_path):
     """Crea un archivo .apkg para Anki."""
